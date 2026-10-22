@@ -49,10 +49,12 @@ class GameRoomController extends Controller
             if ($locked->players()->count() >= 6) {
                 throw ValidationException::withMessages(['room' => 'This room is full.']);
             }
-            return $locked->players()->create([
+             $player = $locked->players()->create([
                 'name' => $data['player_name'], 'token' => '🐯', 'cash' => 1500,
                 'position' => 0, 'seat' => $locked->players()->count(), 'is_connected' => true,
             ]);
+            if ($locked->players()->count() >= 2) { $locked->status = 'playing'; $locked->save(); }
+            return $player;
         });
         $room->refresh()->load('players');
         broadcast(new GameStateUpdated($room));
@@ -69,7 +71,7 @@ class GameRoomController extends Controller
     {
         $data = $request->validate([
             'player_id' => ['required', 'integer'],
-            'type' => ['required', 'in:start,roll,buy,end_turn'],
+            'type' => ['required', 'in:start,roll,buy,end_turn,leave'],
             'space_id' => ['nullable', 'integer', 'between:0,39'],
         ]);
         $room = DB::transaction(function () use ($code, $data) {
@@ -77,9 +79,40 @@ class GameRoomController extends Controller
             $players = $room->players()->orderBy('seat')->lockForUpdate()->get();
             $player = $players->firstWhere('id', (int) $data['player_id']);
             if (!$player) throw ValidationException::withMessages(['player_id' => 'Player is not in this room.']);
+
+            // Leaving does not require the player to own the active turn.
+            if ($data['type'] === 'leave') {
+                $state = $room->state ?? ['turn' => 0, 'properties' => [], 'dice' => null];
+                $properties = $state['properties'] ?? [];
+
+                foreach ($properties as $space => $ownerId) {
+                    if ((int) $ownerId === $player->id) {
+                        unset($properties[$space]);
+                    }
+                }
+
+                $player->delete();
+                $remainingPlayers = $room->players()->orderBy('seat')->get();
+
+                if ($remainingPlayers->isEmpty()) {
+                    $room->delete();
+
+                    return null;
+                }
+
+                $state['properties'] = $properties;
+                $state['turn'] = 0;
+                $state['dice'] = null;
+                $room->status = $remainingPlayers->count() < 2 ? 'lobby' : 'playing';
+                $room->state = $state;
+                $room->save();
+
+                return $room->setRelation('players', $remainingPlayers);
+            }
+
             $state = $room->state ?? ['turn' => 0, 'properties' => [], 'dice' => null];
             if ($players->isEmpty() || $players[$state['turn'] % $players->count()]->id !== $player->id) {
-                throw ValidationException::withMessages(['turn' => 'It is not this player’s turn.']);
+                throw ValidationException::withMessages(['turn' => 'It is not this player\'s turn.']);
             }
 
             // MVP server-authoritative dice and movement. Expand with a complete space registry,
@@ -120,6 +153,12 @@ class GameRoomController extends Controller
             $room->save();
             return $room->load('players');
         });
+
+        // If room was deleted (no players left), return 204 No Content
+        if ($room === null) {
+            return response()->json(null, 204);
+        }
+
         broadcast(new GameStateUpdated($room));
         return response()->json(['data' => $room]);
     }
