@@ -1,0 +1,35 @@
+<?php
+
+// Keep the canonical board registry on the server. Index must match the frontend board.
+return [
+ 'spaces' => [
+  1 => ['name'=>'Old Dhaka','type'=>'property','price'=>600,'rent'=>40],
+  3 => ['name'=>'Lalbagh Fort','type'=>'property','price'=>600,'rent'=>50],
+  5 => ['name'=>'Dhaka Metro','type'=>'rail','price'=>200,'rent'=>50],
+  6 => ['name'=>'Sylhet Tea Gardens','type'=>'property','price'=>1000,'rent'=>80],
+  8 => ['name'=>'Jaflong','type'=>'property','price'=>1000,'rent'=>80],
+  9 => ['name'=>'Ratargul Swamp Forest','type'=>'property','price'=>1200,'rent'=>100],
+  11 => ['name'=>'Rajshahi Silk','type'=>'property','price'=>1400,'rent'=>120],
+  12 => ['name'=>'Power Utility','type'=>'utility','price'=>150,'rent'=>40],
+  13 => ['name'=>'Paharpur','type'=>'property','price'=>1400,'rent'=>120],
+  14 => ['name'=>'Mahasthangarh','type'=>'property','price'=>1600,'rent'=>140],
+  15 => ['name'=>'Chattogram Port','type'=>'rail','price'=>200,'rent'=>50],
+  16 => ['name'=>'Cox’s Bazar','type'=>'property','price'=>1800,'rent'=>160],
+  18 => ['name'=>'Saint Martin’s Island','type'=>'property','price'=>1800,'rent'=>160],
+  19 => ['name'=>'Inani Beach','type'=>'property','price'=>2000,'rent'=>180],
+  21 => ['name'=>'Sundarbans','type'=>'property','price'=>2200,'rent'=>200],
+  23 => ['name'=>'Kuakata','type'=>'property','price'=>2200,'rent'=>200],
+  24 => ['name'=>'Padma Bridge','type'=>'property','price'=>2400,'rent'=>220],
+  25 => ['name'=>'Padma Rail Link','type'=>'rail','price'=>200,'rent'=>50],
+  26 => ['name'=>'National Parliament','type'=>'property','price'=>2600,'rent'=>240],
+  27 => ['name'=>'Jamuna Bridge','type'=>'property','price'=>2600,'rent'=>240],
+  28 => ['name'=>'Water Utility','type'=>'utility','price'=>150,'rent'=>40],
+  29 => ['name'=>'National Museum','type'=>'property','price'=>2800,'rent'=>260],
+  31 => ['name'=>'Kaptai Lake','type'=>'property','price'=>3000,'rent'=>280],
+  32 => ['name'=>'Bandarban Hills','type'=>'property','price'=>3000,'rent'=>280],
+  34 => ['name'=>'Rangamati','type'=>'property','price'=>3200,'rent'=>300],
+  35 => ['name'=>'Mongla Port','type'=>'rail','price'=>200,'rent'=>50],
+  36 => ['name'=>'Bashundhara City','type'=>'property','price'=>3500,'rent'=>350],
+  38 => ['name'=>'Jamuna Future Park','type'=>'property','price'=>4000,'rent'=>400],
+ ],
+];
