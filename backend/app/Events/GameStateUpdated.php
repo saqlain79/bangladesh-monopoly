@@ -6,10 +6,11 @@ use App\Models\GameRoom;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class GameStateUpdated implements ShouldBroadcast
+class GameStateUpdated implements ShouldBroadcast, ShouldDispatchAfterCommit
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
@@ -17,10 +18,13 @@ class GameStateUpdated implements ShouldBroadcast
 
     public function broadcastOn(): array
     {
-        return [new PrivateChannel('game-room.' . $this->room->code)];
+        return [new PrivateChannel('game-room.'.$this->room->code)];
     }
 
-    public function broadcastAs(): string { return 'game.state.updated'; }
+    public function broadcastAs(): string
+    {
+        return 'game.state.updated';
+    }
 
     public function broadcastWith(): array
     {

@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class GamePlayer extends Model
 {
-    protected $fillable = ['game_room_id', 'name', 'token', 'cash', 'position', 'seat', 'is_connected', 'is_bankrupt'];
+    protected $fillable = ['game_room_id', 'session_key', 'name', 'token', 'cash', 'position', 'seat', 'is_connected', 'is_bankrupt'];
 
     public function room(): BelongsTo
     {

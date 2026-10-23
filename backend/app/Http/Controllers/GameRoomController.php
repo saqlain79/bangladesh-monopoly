@@ -3,163 +3,210 @@
 namespace App\Http\Controllers;
 
 use App\Events\GameStateUpdated;
-use App\Models\GamePlayer;
+use App\Http\Requests\GameActionRequest;
+use App\Http\Requests\JoinGameRoomRequest;
+use App\Http\Requests\StoreGameRoomRequest;
 use App\Models\GameRoom;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Inertia\Inertia;
+use Inertia\Response;
 
 class GameRoomController extends Controller
 {
-    public function store(Request $request): JsonResponse
+    public function show(GameRoom $room): Response
     {
-        $data = $request->validate([
-            'name' => ['required', 'string', 'min:2', 'max:50'],
-            'player_name' => ['required', 'string', 'min:2', 'max:24'],
+        $room->load(['players' => fn ($query) => $query->orderBy('seat')]);
+
+        return Inertia::render('Game', [
+            'room' => $room,
+            'playerId' => $room->players
+                ->firstWhere('session_key', session()->getId())
+                ?->id,
         ]);
-        $code = strtoupper(Str::random(6));
-        $room = DB::transaction(function () use ($data, $code) {
-            $room = GameRoom::create([
-                'code' => $code, 'name' => $data['name'], 'host_name' => $data['player_name'],
-                'status' => 'lobby', 'state' => ['turn' => 0, 'properties' => [], 'dice' => null],
-            ]);
-            $room->players()->create([
-                'name' => $data['player_name'], 'token' => '🛺', 'cash' => 1500,
-                'position' => 0, 'seat' => 0, 'is_connected' => true,
-            ]);
-            return $room->load('players');
-        });
-        return response()->json(['data' => $room], 201);
     }
 
-    public function join(Request $request): JsonResponse
+    public function store(StoreGameRoomRequest $request): RedirectResponse
     {
-        $data = $request->validate([
-            'code' => ['required', 'string', 'size:6'],
-            'player_name' => ['required', 'string', 'min:2', 'max:24'],
-        ]);
-        $room = GameRoom::where('code', strtoupper($data['code']))->firstOrFail();
-        $player = DB::transaction(function () use ($room, $data) {
-            $locked = GameRoom::whereKey($room->id)->lockForUpdate()->firstOrFail();
-            if ($locked->status !== 'lobby') {
-                throw ValidationException::withMessages(['room' => 'This game has already started.']);
-            }
-            if ($locked->players()->count() >= 6) {
-                throw ValidationException::withMessages(['room' => 'This room is full.']);
-            }
-             $player = $locked->players()->create([
-                'name' => $data['player_name'], 'token' => '🐯', 'cash' => 1500,
-                'position' => 0, 'seat' => $locked->players()->count(), 'is_connected' => true,
+        $data = $request->validated();
+        $room = DB::transaction(function () use ($data): GameRoom {
+            do {
+                $code = Str::upper(Str::random(6));
+            } while (GameRoom::query()->where('code', $code)->exists());
+
+            $room = GameRoom::query()->create([
+                'code' => $code,
+                'name' => $data['name'],
+                'host_name' => $data['player_name'],
+                'status' => 'lobby',
+                'state' => ['turn' => 0, 'properties' => [], 'dice' => null],
             ]);
-            if ($locked->players()->count() >= 2) { $locked->status = 'playing'; $locked->save(); }
+
+            $room->players()->create([
+                'session_key' => session()->getId(),
+                'name' => $data['player_name'],
+                'token' => '🛺',
+                'cash' => 1500,
+                'position' => 0,
+                'seat' => 0,
+                'is_connected' => true,
+            ]);
+
+            return $room;
+        });
+
+        return to_route('rooms.show', $room);
+    }
+
+    public function join(JoinGameRoomRequest $request): RedirectResponse
+    {
+        $data = $request->validated();
+        $room = GameRoom::query()->where('code', Str::upper($data['code']))->firstOrFail();
+
+        $player = DB::transaction(function () use ($data, $room) {
+            $lockedRoom = GameRoom::query()->whereKey($room->id)->lockForUpdate()->firstOrFail();
+
+            if ($lockedRoom->status !== 'lobby') {
+                throw ValidationException::withMessages(['code' => 'This game has already started.']);
+            }
+
+            if ($lockedRoom->players()->count() >= 6) {
+                throw ValidationException::withMessages(['code' => 'This room is full.']);
+            }
+
+            if ($lockedRoom->players()->where('session_key', session()->getId())->exists()) {
+                throw ValidationException::withMessages(['code' => 'This browser has already joined the room.']);
+            }
+
+            $player = $lockedRoom->players()->create([
+                'session_key' => session()->getId(),
+                'name' => $data['player_name'],
+                'token' => ['🐯', '🐘', '🦚', '🐬', '🦌'][$lockedRoom->players()->count() - 1],
+                'cash' => 1500,
+                'position' => 0,
+                'seat' => $lockedRoom->players()->count(),
+                'is_connected' => true,
+            ]);
+
+            if ($lockedRoom->players()->count() >= 2) {
+                $lockedRoom->update(['status' => 'playing']);
+            }
+
             return $player;
         });
+
         $room->refresh()->load('players');
         broadcast(new GameStateUpdated($room));
-        return response()->json(['data' => ['player' => $player, 'room' => $room]], 201);
+
+        return to_route('rooms.show', $room);
     }
 
-    public function show(string $code): JsonResponse
+    public function action(GameActionRequest $request, GameRoom $room): RedirectResponse
     {
-        $room = GameRoom::where('code', strtoupper($code))->with(['players' => fn ($q) => $q->orderBy('seat')])->firstOrFail();
-        return response()->json(['data' => $room]);
-    }
+        $data = $request->validated();
+        $updatedRoom = DB::transaction(function () use ($data, $room): ?GameRoom {
+            $lockedRoom = GameRoom::query()->whereKey($room->id)->lockForUpdate()->firstOrFail();
+            $players = $lockedRoom->players()->orderBy('seat')->lockForUpdate()->get();
+            $player = $players->firstWhere('session_key', session()->getId());
 
-    public function action(Request $request, string $code): JsonResponse
-    {
-        $data = $request->validate([
-            'player_id' => ['required', 'integer'],
-            'type' => ['required', 'in:start,roll,buy,end_turn,leave'],
-            'space_id' => ['nullable', 'integer', 'between:0,39'],
-        ]);
-        $room = DB::transaction(function () use ($code, $data) {
-            $room = GameRoom::where('code', strtoupper($code))->lockForUpdate()->firstOrFail();
-            $players = $room->players()->orderBy('seat')->lockForUpdate()->get();
-            $player = $players->firstWhere('id', (int) $data['player_id']);
-            if (!$player) throw ValidationException::withMessages(['player_id' => 'Player is not in this room.']);
+            if ($player === null) {
+                throw ValidationException::withMessages(['player' => 'This browser is not a player in this room.']);
+            }
 
-            // Leaving does not require the player to own the active turn.
+            $state = $lockedRoom->state ?? ['turn' => 0, 'properties' => [], 'dice' => null];
+
             if ($data['type'] === 'leave') {
-                $state = $room->state ?? ['turn' => 0, 'properties' => [], 'dice' => null];
-                $properties = $state['properties'] ?? [];
-
-                foreach ($properties as $space => $ownerId) {
+                foreach ($state['properties'] ?? [] as $space => $ownerId) {
                     if ((int) $ownerId === $player->id) {
-                        unset($properties[$space]);
+                        unset($state['properties'][$space]);
                     }
                 }
 
                 $player->delete();
-                $remainingPlayers = $room->players()->orderBy('seat')->get();
+                $remainingPlayers = $lockedRoom->players()->orderBy('seat')->get();
 
                 if ($remainingPlayers->isEmpty()) {
-                    $room->delete();
+                    $lockedRoom->delete();
 
                     return null;
                 }
 
-                $state['properties'] = $properties;
                 $state['turn'] = 0;
                 $state['dice'] = null;
-                $room->status = $remainingPlayers->count() < 2 ? 'lobby' : 'playing';
-                $room->state = $state;
-                $room->save();
+                $lockedRoom->update([
+                    'status' => $remainingPlayers->count() < 2 ? 'lobby' : 'playing',
+                    'state' => $state,
+                ]);
 
-                return $room->setRelation('players', $remainingPlayers);
+                return $lockedRoom->setRelation('players', $remainingPlayers);
             }
 
-            $state = $room->state ?? ['turn' => 0, 'properties' => [], 'dice' => null];
             if ($players->isEmpty() || $players[$state['turn'] % $players->count()]->id !== $player->id) {
-                throw ValidationException::withMessages(['turn' => 'It is not this player\'s turn.']);
+                throw ValidationException::withMessages(['turn' => 'It is not your turn.']);
             }
 
-            // MVP server-authoritative dice and movement. Expand with a complete space registry,
-            // rent calculation, cards, jail, mortgages, trades and building before public launch.
-            if ($data['type'] === 'start') {
-                if ($room->status !== 'lobby') throw ValidationException::withMessages(['room' => 'Game already started.']);
-                if ($players->count() < 2) throw ValidationException::withMessages(['room' => 'At least two players are required.']);
-                $room->status = 'playing';
-            } elseif ($data['type'] === 'roll') {
-                if (!empty($state['dice'])) throw ValidationException::withMessages(['dice' => 'You already rolled this turn.']);
-                $a = random_int(1, 6); $b = random_int(1, 6);
-                $old = $player->position; $new = ($old + $a + $b) % 40;
-                $cash = $player->cash + ($old + $a + $b >= 40 ? 200 : 0);
-                $space = $new;
-                if (in_array($space, [4, 38], true)) $cash -= ($space === 4 ? 200 : 100);
-                if ($space === 30) $new = 10;
-                $player->update(['position' => $new, 'cash' => $cash]);
-                $state['dice'] = [$a, $b];
-                $state['last_roll'] = ['player_id' => $player->id, 'from' => $old, 'to' => $new];
+            if ($data['type'] === 'roll') {
+                if (! empty($state['dice'])) {
+                    throw ValidationException::withMessages(['dice' => 'You already rolled this turn.']);
+                }
+
+                $firstDie = random_int(1, 6);
+                $secondDie = random_int(1, 6);
+                $oldPosition = $player->position;
+                $newPosition = ($oldPosition + $firstDie + $secondDie) % 40;
+                $cash = $player->cash + ($oldPosition + $firstDie + $secondDie >= 40 ? 200 : 0);
+
+                if (in_array($newPosition, [4, 38], true)) {
+                    $cash -= $newPosition === 4 ? 200 : 100;
+                }
+
+                if ($newPosition === 30) {
+                    $newPosition = 10;
+                }
+
+                $player->update(['position' => $newPosition, 'cash' => $cash]);
+                $state['dice'] = [$firstDie, $secondDie];
+                $state['last_roll'] = ['player_id' => $player->id, 'from' => $oldPosition, 'to' => $newPosition];
             } elseif ($data['type'] === 'buy') {
                 $space = (int) ($data['space_id'] ?? $player->position);
-                $registry = config('monopoly.spaces', []);
-                $property = $registry[$space] ?? null;
-                if (!$property || !in_array($property['type'] ?? '', ['property', 'rail', 'utility'], true)) {
+                $property = config("monopoly.spaces.{$space}");
+
+                if (! $property || ! in_array($property['type'] ?? '', ['property', 'rail', 'utility'], true)) {
                     throw ValidationException::withMessages(['space_id' => 'This space cannot be purchased.']);
                 }
-                if (isset($state['properties'][$space])) throw ValidationException::withMessages(['space_id' => 'This property is already owned.']);
-                if ($player->position !== $space) throw ValidationException::withMessages(['space_id' => 'You are not on this space.']);
-                if ($player->cash < $property['price']) throw ValidationException::withMessages(['cash' => 'Not enough cash.']);
+
+                if (isset($state['properties'][$space])) {
+                    throw ValidationException::withMessages(['space_id' => 'This property is already owned.']);
+                }
+
+                if ($player->position !== $space || $player->cash < $property['price']) {
+                    throw ValidationException::withMessages(['space_id' => 'You cannot buy this property.']);
+                }
+
                 $player->decrement('cash', $property['price']);
                 $state['properties'][$space] = $player->id;
             } elseif ($data['type'] === 'end_turn') {
-                if (empty($state['dice'])) throw ValidationException::withMessages(['turn' => 'Roll before ending your turn.']);
+                if (empty($state['dice'])) {
+                    throw ValidationException::withMessages(['turn' => 'Roll before ending your turn.']);
+                }
+
                 $state['turn'] = ($state['turn'] + 1) % $players->count();
                 $state['dice'] = null;
             }
-            $room->state = $state;
-            $room->save();
-            return $room->load('players');
+
+            $lockedRoom->update(['state' => $state]);
+
+            return $lockedRoom->load('players');
         });
 
-        // If room was deleted (no players left), return 204 No Content
-        if ($room === null) {
-            return response()->json(null, 204);
+        if ($updatedRoom === null) {
+            return to_route('home');
         }
 
-        broadcast(new GameStateUpdated($room));
-        return response()->json(['data' => $room]);
+        broadcast(new GameStateUpdated($updatedRoom));
+
+        return to_route('rooms.show', $updatedRoom);
     }
 }
